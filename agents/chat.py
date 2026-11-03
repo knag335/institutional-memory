@@ -58,7 +58,35 @@ Done when
     - An unknown question gets "I don't have that in memory yet".
 """
 
+from core import run_memory_session, log_event
+
 
 def chat(question: str) -> str:
     """Answer a question using institutional memory. See module SPEC."""
-    raise NotImplementedError("Person 3 to implement")
+    if not question or not question.strip():
+        raise ValueError("Question cannot be empty")
+
+    log_event("chat", "answer", "running", f"question={question[:100]}")
+    try:
+        # Build message restarting the question, instructing the agent to read memory first,
+        # and requesting markdown output with sources and conflict detection
+        prompt = f"""You are answering a question from institutional memory. Read /mnt/memory/ first.
+
+Question: {question}
+
+Answer in markdown:
+1. Direct answer first (1-2 sentences)
+2. Supporting details as bullets
+3. "Sources:" line naming memory files or items used
+4. If memory has conflicting/outdated info, state which is newer and why
+5. If not in memory, say "I don't have that in memory yet"
+
+Never guess or use general knowledge—cite only what you find in /mnt/memory/."""
+
+        response = run_memory_session(prompt, title=f"Chat: {question[:60]}")
+        log_event("chat", "answer", "done")
+        return response
+
+    except Exception as e:
+        log_event("chat", "answer", "error", str(e))
+        raise

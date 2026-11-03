@@ -56,7 +56,79 @@ Done when
     - log_event("task_agent", ...) lines appear in the Monitor.
 """
 
+from core import ask_claude, update_json, log_event
+
 
 def draft_task_action(task: dict) -> str:
     """Draft an email or meeting invite for a task. See module SPEC."""
-    raise NotImplementedError("Person 3 to implement")
+    if not task or not task.get("id"):
+        raise ValueError("Task must have an id")
+
+    log_event("task_agent", "draft_action", "running", f"task_id={task.get('id')}")
+    try:
+        task_id = task.get("id")
+        task_title = task.get("title", "Untitled")
+
+        # Load source item for context
+        from core import load_all
+        source_item = None
+        if task.get("item_id"):
+            items = load_all("items")
+            source_item = next((i for i in items if i["id"] == task["item_id"]), None)
+
+        # Infer email vs meeting: needs discussion/several people -> meeting; single request/approval/info -> email
+        is_meeting = any(
+            keyword in task_title.lower()
+            for keyword in ["meeting", "schedule", "discuss", "sync", "standup", "call", "review", "checkpoint"]
+        )
+
+        # Extract context from source item
+        source_text = source_item.get("text", "") if source_item else ""
+        source_category = source_item.get("category", "TBD") if source_item else "TBD"
+
+        if is_meeting:
+            prompt = f"""Draft a concise calendar meeting invite. Keep it ~120 words max.
+
+Task: {task_title}
+Source: {source_category}
+Context: {source_text[:300]}
+
+Draft as markdown:
+**Type:** Meeting invite
+**To:** [roles needed, or TBD]
+**Subject:** [subject line with clear ask]
+**Suggested time:** [TBD if unknown, or infer from context]
+**Duration:** 30 min or 1 hour
+**Agenda:**
+- bullet 1
+- bullet 2
+
+At the top, add one line: "Why this draft: [fact used]" so humans can check."""
+
+        else:
+            prompt = f"""Draft a professional email. Keep it ~120 words max, clear ask in first two lines.
+
+Task: {task_title}
+Source: {source_category}
+Context: {source_text[:300]}
+
+Draft as markdown:
+**Type:** Email
+**To:** [recipient role, or TBD if unknown]
+**Subject:** [subject line with clear ask and deadline if applicable]
+**Body:**
+[concise, fact-based, sign as "[Your name]"]
+
+At the top, add one line: "Why this draft: [fact used]" so humans can check."""
+
+        draft = ask_claude(prompt)
+
+        # Save draft to task record, mark as drafting (awaiting human review/approval)
+        update_json("tasks", task_id, {"draft": draft, "status": "drafting", "owner": "agent"})
+
+        log_event("task_agent", "draft_action", "done", f"draft_len={len(draft)}")
+        return draft
+
+    except Exception as e:
+        log_event("task_agent", "draft_action", "error", str(e))
+        raise
